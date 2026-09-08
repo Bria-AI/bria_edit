@@ -1,0 +1,39 @@
+# Runtime dependencies for this self-contained fibo_edit_next training copy.
+# Full list (verified via AST scan of every import across this directory),
+# pinned to the versions this copy was actually run and checkpoint-tested
+# against -- see README.md's "Actually run: local smoke test" section.
+#
+# The source repo's own requirements.txt is much shorter (just uv/pyrallis/
+# diffusers-from-git) because it assumes the briatorch:pytorch-2.10.0-aws
+# training image already has torch/accelerate/transformers/etc. baked in.
+# This file is for running the self-contained copy standalone, without that
+# image.
+
+torch>=2.10.0          # varlen attention (transformer_bria_varlen.py) needs
+                        # torch.nn.attention.varlen, added in 2.10 -- this
+                        # copy was smoke-tested on 2.9.0 with flash attention
+                        # only (use_varlen_attention: false); 2.9.0 works for
+                        # that path but will ImportError on the varlen path.
+torchvision==0.24.0     # DreamBoothDataset image transforms (dataset_factory.py)
+diffusers==0.36.0       # tested against the PyPI release; the source repo
+                        # instead installs `diffusers @ git+https://github.com/huggingface/diffusers.git`
+                        # -- switch to that if you hit an API this pin lacks
+transformers==4.56.0    # smolLM text encoder + AutoTokenizer/AutoModelForCausalLM
+accelerate==1.10.1      # FSDP/DDP, checkpoint save/load, mixed precision
+peft==0.20.0            # LoRA (add_lora/load_lora). MUST be >=0.20.0 --
+                        # 0.19.1 (this box's original pre-installed version)
+                        # fails LoRA-checkpoint *resume* specifically with
+                        # `ImportError: cannot import name 'EmbeddingParallel'
+                        # from transformers.integrations.tensor_parallel`,
+                        # raised inside peft's own load_adapter() ->
+                        # _maybe_shard_state_dict_for_tp(). Confirmed fixed
+                        # by upgrading to 0.20.0; re-verify if you pin higher.
+safetensors==0.8.0rc0
+numpy==1.26.4
+Pillow==9.1.0
+webdataset==1.0.2       # tar-shard dataloading (utils/torch_utils.py, dataset_factory.py)
+datasets==4.5.0         # HF `datasets.IterableDataset` (random_latents + DreamBoothDataset HF-source path)
+pyrallis==0.3.1         # --config_path YAML -> TrainConfig dataclass parsing
+sagemaker-ssh-helper==2.3.0  # no-ops outside an actual SageMaker training job
+wandb==0.22.3
+tqdm==4.67.1
