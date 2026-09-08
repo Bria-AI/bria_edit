@@ -9,7 +9,7 @@ from diffusers.models.normalization import AdaLayerNormContinuous
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.embeddings import TimestepEmbedding, get_timestep_embedding
-from bria_utils import FluxPosEmbed as EmbedND
+from utils.common import FluxPosEmbed as EmbedND
 from diffusers.models.transformers.transformer_flux import FluxTransformerBlock
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.attention_processor import (

@@ -26,7 +26,7 @@ from PIL.ImageOps import exif_transpose
 from torch.utils.data import DataLoader
 from datasets import IterableDataset
 from torchvision import transforms
-from utils.torch_utils import load_dataset_from_tars
+from utils.accelerator import load_dataset_from_tars
 
 
 class DatasetMode(Enum):

@@ -24,7 +24,7 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.transformers.transformer_flux import FluxTransformerBlock
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from torch.nn.attention.varlen import varlen_attn
-from transformer_bria_repa import Bria4Transformer2DModel, FluxSingleTransformerBlock
+from model.transformer import Bria4Transformer2DModel, FluxSingleTransformerBlock
 
 logger = logging.get_logger(__name__)
 
@@ -447,9 +447,9 @@ class BriaTransformer2DModelVarlen(nn.Module):
         self.inner_dim = num_attention_heads * attention_head_dim
 
         # Import components from Bria4 model
-        from bria_utils import FluxPosEmbed as EmbedND
+        from utils.common import FluxPosEmbed as EmbedND
         from diffusers.models.normalization import AdaLayerNormContinuous
-        from transformer_bria_repa import TextProjection, TimestepProjEmbeddings
+        from model.transformer import TextProjection, TimestepProjEmbeddings
 
         self.pos_embed = EmbedND(theta=rope_theta, axes_dim=axes_dims_rope)
         self.time_embed = TimestepProjEmbeddings(embedding_dim=self.inner_dim, time_theta=time_theta)

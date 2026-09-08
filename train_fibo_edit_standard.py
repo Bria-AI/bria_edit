@@ -28,7 +28,7 @@ import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from bria_utils import (
+from utils.common import (
     get_lr_scheduler,
     get_smollm_prompt_embeds_varlen,
     init_text_encoder,
@@ -36,9 +36,9 @@ from bria_utils import (
     init_wandb,
     pad_embedding,
 )
-from checkpoint_loader import load_checkpoint
-from checkpoint_saver import save_checkpoint
-from dataset_factory import (
+from checkpoint.loader import load_checkpoint
+from checkpoint.saver import save_checkpoint
+from data.dataset import (
     DatasetBuilder,
     DatasetConfig,
     DatasetMode,
@@ -46,8 +46,8 @@ from dataset_factory import (
 )
 from diffusers.training_utils import EMAModel
 from diffusers.utils import USE_PEFT_BACKEND
-from init_handler import TransformerInitResult, init_transformer
-from latent_packing import prepare_latent_image_ids
+from model.init import TransformerInitResult, init_transformer
+from model.latent_packing import prepare_latent_image_ids
 from tqdm.auto import tqdm
 from train_common import (
     CFGDropoutConfig,
@@ -69,8 +69,8 @@ from train_common import (
     sample_noise_and_timesteps,
     unpack_model_pred,
 )
-from transformer_bria_repa import Bria4Transformer2DModel
-from utils.torch_utils import (
+from model.transformer import Bria4Transformer2DModel
+from utils.accelerator import (
     compile_transformer,
     get_accelerator,
     json_to_data,
@@ -1091,7 +1091,7 @@ def main():
 
     # VAE config
     base_dir = Path(__file__).parent.absolute()
-    with open(f"{base_dir}/vae_wan.json.out") as f:
+    with open(f"{base_dir}/configs/vae_wan.json.out") as f:
         vae_config = json.load(f)
     vae_config["latent_channels"] = 48
     vae_config["shift_factor"] = 0
@@ -1135,9 +1135,9 @@ def main():
 
     # Transformer config
     if config.debug:
-        config_path = os.path.join(base_dir, "bria_transformer_debug.json.out")
+        config_path = os.path.join(base_dir, "configs", "bria_transformer_debug.json.out")
     else:
-        config_path = os.path.join(base_dir, "bria_transformer.json.out")
+        config_path = os.path.join(base_dir, "configs", "bria_transformer.json.out")
 
     with open(config_path) as f:
         transformer_config = json.load(f)

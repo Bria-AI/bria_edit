@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import diffusers
 import torch
 from accelerate.logging import get_logger
-from latent_packing import pack_latents, pack_latents_no_patch, prepare_latent_image_ids, unpack_latents, unpack_latents_no_patch
+from model.latent_packing import pack_latents, pack_latents_no_patch, prepare_latent_image_ids, unpack_latents, unpack_latents_no_patch
 
 logger = get_logger(__name__, log_level="INFO")
 

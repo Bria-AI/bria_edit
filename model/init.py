@@ -22,9 +22,9 @@ from accelerate import Accelerator
 from diffusers.training_utils import cast_training_params
 from safetensors.torch import load_file
 
-from bria_utils import get_env_prefix
-from lora_utils import add_lora, load_lora
-from transformer_bria_repa import Bria4Transformer2DModel
+from utils.common import get_env_prefix
+from model.lora import add_lora, load_lora
+from model.transformer import Bria4Transformer2DModel
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ class TransformerInitHandler:
 
         # Convert to varlen attention transformer if requested (must happen before LoRA and FSDP)
         if self.use_varlen_attention:
-            from transformer_bria_varlen import BriaTransformer2DModelVarlen
+            from model.transformer_varlen import BriaTransformer2DModelVarlen
             transformer = BriaTransformer2DModelVarlen.from_standard_model(transformer)
             logger.info("Converted transformer to BriaTransformer2DModelVarlen for varlen attention")
 
@@ -162,7 +162,7 @@ class TransformerInitHandler:
         # caller that doesn't pass them is unaffected.
         lora_weights_loaded_early = False
         if is_lora and self.resume_from_checkpoint not in (None, "no") and self.checkpoint_local_path:
-            from checkpoint_loader import CheckpointLoader
+            from checkpoint.loader import CheckpointLoader
             resume_loader = CheckpointLoader(
                 accelerator=self.accelerator,
                 checkpoint_dir=self.checkpoint_local_path,

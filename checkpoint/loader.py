@@ -179,7 +179,7 @@ class CheckpointLoader:
         """
         Resolve the checkpoint path and load ONLY the LoRA adapter weights into `transformer`.
 
-        Call this BEFORE FSDP wraps the transformer (e.g. from init_handler.py, right after
+        Call this BEFORE FSDP wraps the transformer (e.g. from model/init.py, right after
         add_lora() and before accelerator.prepare(transformer)) -- loading LoRA weights via
         transformer.load_adapter() AFTER FSDP has already sharded the model can silently
         produce a 0-sized *local shard* for very small target layers on some rank, since

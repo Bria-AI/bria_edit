@@ -1,238 +1,222 @@
-# Self-contained `train_fibo_edit_standard.py` copy
+# bria_edit
 
-A trimmed, standalone copy of everything `train_fibo_edit_standard.py` (the
-fibo_edit_next training entrypoint, originally at
-`training/fibo_edit/train_fibo_edit_standard.py` in Bria's internal
-`foundation-training` monorepo) actually needs to run locally, with every
-unused import, dead function, and non-training file removed. Verified with
-`pyflakes` (0 warnings) and an import smoke test — see
-[Verification](#verification).
+Standalone training code for **fibo_edit_next** — Bria's edit-conditioned
+image diffusion model (a FLUX-style transformer, flow-matching objective,
+Wan2.2 VAE latent space, smolLM text conditioning). This repo is a trimmed,
+self-contained copy of the training entrypoint and everything it needs to
+run — no unrelated inference/eval code, no dead imports. See
+`README_INTERNAL.md` if you want the full "why is it structured this way"
+writeup; this doc is just how to actually use it.
 
-10,138 → 6,268 lines (~38% smaller) across the retained files, for **zero**
-behavior change on the actual training path (STANDARD + DREAMBOOTH data
-modes, LoRA/full fine-tune, flash + varlen attention, FSDP, smolLM text
-encoder, EMA, resume/reinit — everything `TrainConfig` still exposes).
+## Install
 
-## Files
+```bash
+pip install -r requirements.txt
+```
 
-| File | What it is |
-|---|---|
-| `train_fibo_edit_standard.py` | Entry point (`python train_fibo_edit_standard.py --config ...`) |
-| `train_common.py` | Shared trainer plumbing (data-config parsing, latent prep, CFG dropout, varlen packing) |
-| `dataset_factory.py` | Dataloader (`DatasetBuilder`) — STANDARD (packed tars) + DREAMBOOTH (raw images) modes |
-| `bria_utils.py` | **Merged** from the source's `bria_utils.py` + `bria4_utils.py` (see [Merged files](#merged-files) below) — RoPE (`FluxPosEmbed`), LR scheduler, smolLM text-encoder init, prompt embedding, wandb init, timestep samplers |
-| `init_handler.py` | Transformer construction, weight loading, LoRA setup, FSDP prepare |
-| `checkpoint_loader.py` / `checkpoint_saver.py` | Checkpoint resume/save (unmodified from source) |
-| `transformer_bria_repa.py` | The model (`Bria4Transformer2DModel`) |
-| `transformer_bria_varlen.py` | Varlen-attention transformer block variants |
-| `lora_utils.py` | `add_lora` / `load_lora` (unmodified from source) |
-| `latent_packing.py` | **New** — 5 pure functions extracted from `pipeline_bria_wan.py`'s `BriaPipeline` (see below) |
-| `utils/torch_utils.py` | Accelerator/FSDP setup, WebDataset tar loading, torch.compile helper |
-| `vae_wan.json.out`, `bria_transformer.json.out`, `bria_transformer_debug.json.out` | Model/VAE config JSON loaded at runtime relative to `__file__` (renamed from the source's `flux_transformer*.json.out` — the config's own `_class_name` field said `FluxTransformer2DModel`, but the code never reads that field to pick a class; it always calls `Bria4Transformer2DModel.from_config(...)` explicitly. Renamed the files and fixed `_class_name` to match what's actually loaded; left `_name_or_path`, an accurate provenance note pointing at the original FLUX.1-dev snapshot this config was derived from) |
-| `requirements.txt` | **New** — full pinned dependency list for running this copy standalone (the source repo's own `requirements.txt` is 3 lines and assumes the `briatorch:pytorch-2.10.0-aws` training image already has everything else baked in); versions match what was actually smoke-tested — see below |
+`torch>=2.10.0` is required for **varlen attention** specifically
+(`torch.nn.attention.varlen` was added in 2.10). Flash attention (the
+default, `use_varlen_attention: false`) works fine on 2.9.x too. See
+[Troubleshooting](#troubleshooting) if you hit import errors here.
 
-Not copied at all — genuinely unrelated to running this training script:
-`sky/`, `launch_scripts/`, `launcher/`, `tests/`, `reframe/`, `expand_bg/`,
-`edit_t2i_aesthetics/`, `merge_loras_and_fuse.py`, `split_buckets.py`,
-`validate_dataset.py`, `probe_bs.py`, the sibling `train_fibo*.py` scripts
-(unified / cfg_distillation / dpo — different training scripts sharing some
-of these modules), `dockers/`.
+## Quickstart: run it locally in 2 minutes (no real data needed)
 
-## The big cut: the inference pipeline was never used by training
+The fastest way to confirm your environment works is a tiny synthetic-data
+run — no S3, no packed tars, no real checkpoint. `random_latents: true`
+makes the dataloader generate random tensors of the right shape instead of
+reading real data, and `a1-t` is the smallest model scale (~50M params).
 
-`train_common.py` and `train_fibo_edit_standard.py` only ever called 5
-**static** methods directly on the `Bria4EditPipelineWan` class object
-(`Bria4EditPipelineWan._pack_latents(...)`, never on an instance) — pure
-tensor reshape/patchify math with no `self` dependency. Those 5 methods
-actually live on `Bria4EditPipelineWan`'s parent, `BriaPipeline`
-(`pipeline_bria_wan.py`). Grepped the entire training call graph: the
-pipeline classes themselves are **never instantiated** — no
-`Bria4EditPipelineWan(...)` / `BriaPipeline(...)` constructor call exists
-anywhere in the training path. Training runs entirely on precomputed
-latents from packed tars; it never encodes or decodes an image.
+```yaml
+# smoke.yaml
+debug: 0
+transformer_architecture: a1-t
+lora_rank: 0                    # 0 = full fine-tune, >0 = LoRA (e.g. 64)
+vae: wan
+text_encoder_type: smolLM
+text_encoder_path: ""           # empty -> downloads HuggingFaceTB/SmolLM3-3B
+                                 # from the HF Hub on first run (~6GB)
 
-That means the full generation/inference machinery — `encode_prompt`,
-the denoising sampling loop, VAE decode, classifier-free/adaptive-projected
-guidance — was dead weight in the training process's import graph, dragging
-in three more files nothing in training actually used:
-- `pipeline_bria4_edit_wan.py` / `pipeline_bria_wan.py` — the full
-  `Bria4EditPipelineWan(BriaPipeline(FluxPipeline))` inference pipelines
-- `transformer_bria.py` — imported by `pipeline_bria_wan.py` **only** for
-  a constructor type annotation (`transformer: BriaTransformer2DModel`)
-  that nothing in the training path ever satisfies (the real transformer
-  passed around is `Bria4Transformer2DModel` from `transformer_bria_repa.py`)
-- `vae2_2.py` (`Wan2_2_VAE`) — only reachable through the pipelines' own
-  `__call__`/decode path; training never touches a VAE
-- `apg_utils.py` — guidance helpers, only used inside the pipelines' own
-  `__call__`
+train_batch_size: 1
+max_train_steps: 5
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-4
+lr_warmup_steps: 2
 
-`latent_packing.py` is the replacement: the 5 static methods, copied
-verbatim as plain module-level functions (`pack_latents`,
-`pack_latents_no_patch`, `unpack_latents`, `unpack_latents_no_patch`,
-`prepare_latent_image_ids`), needing only `torch`. `train_common.py` and
-`train_fibo_edit_standard.py` import from it instead of from
-`pipeline_bria4_edit_wan`.
+random_latents: true
+random_latents_resolution: 256
+max_sequence_length: 32
 
-## Merged files
+checkpointing_steps: 3
+resume_from_checkpoint: "no"
+checkpoint_local_path: "/tmp/bria_edit_smoke/ckpt"
+output_dir: "/tmp/bria_edit_smoke/out"
 
-The source repo also has a separate `checkpoint_loader.py` / `checkpoint_saver.py`
-pair — kept as two files here, unmodified: they're genuinely complementary
-(load vs. save), zero overlapping symbol names, both directly imported by
-`train_fibo_edit_standard.py` at two different call sites. Nothing to merge.
+use_fsdp: 0
+use_varlen_attention: false     # flash attention -- no torch 2.10 requirement
+```
 
-`bria_utils.py` / `bria4_utils.py` were a different story. In the source
-repo the split makes some sense (`bria_utils.py` is older/shared
-infrastructure used by several training scripts; `bria4_utils.py` holds
-bria4-generation-specific additions), but after trimming both down to only
-what `train_fibo_edit_standard.py` actually uses, `bria4_utils.py`'s *only*
-reason to be a separate file — `get_env_prefix` — turned out to already
-exist in `bria_utils.py` too, **defined identically** (byte-for-byte
-identical body, just single- vs double-quote style):
+```bash
+MASTER_ADDR=127.0.0.1 MASTER_PORT=29500 \
+RANK=0 LOCAL_RANK=0 WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=0 \
+WANDB_MODE=disabled \
+python train_fibo_edit_standard.py --config_path smoke.yaml
+```
+
+That's a real forward + backward pass + optimizer step + a real checkpoint
+save on your GPU, just with meaningless synthetic data — good for
+"does my environment/GPU/dependencies actually work" before committing to a
+real run. To test resuming, rerun with `resume_from_checkpoint: "latest"`
+and a higher `max_train_steps`.
+
+`WANDB_MODE=disabled` avoids needing a real `WANDB_TOKEN` for this kind of
+throwaway run — see [Troubleshooting](#troubleshooting), it doesn't fully
+suppress wandb on its own.
+
+## Real training
+
+### 1. Data
+
+Training reads **packed tars** of precomputed VAE latents + captions (not
+raw images — there's no VAE encode step in the training loop itself). Each
+pickle record inside a tar looks like:
 
 ```python
-# bria_utils.py                      # bria4_utils.py
-def get_env_prefix():                def get_env_prefix():
-    env = os.environ.get(...)            env = os.environ.get(...)
-    ...                                   ...
+{
+    "caption": "<json string: structured caption, with an 'edit_instruction' field>",
+    "latents_{w}_{h}": <torch.Tensor [C, h, w]>,        # target/output latent
+    "context_latents_0": <torch.Tensor [C, h0, w0]>,    # optional: 1..N ordered
+    "context_latents_1": <torch.Tensor [C, h1, w1]>,    # reference/context latents
+    ...
+}
 ```
 
-Not a naming coincidence — a genuine duplicate. Every other symbol in each
-file was only ever used by call sites that already knew which file to import
-it from, so there was no real functional split left to preserve. Merged
-everything into one `bria_utils.py`, keeping a single `get_env_prefix`, and
-updated `train_fibo_edit_standard.py`'s two import blocks into one. Deleted
-`bria4_utils.py`.
+No context keys at all → a pure text-to-image sample. One `context_latents_i`
+→ a single-reference edit. Multiple → multi-reference editing (arbitrary N,
+each can be a different resolution).
 
-## Other removals
+Point `data_config` (a `"NAME:GPUS:BATCH_SIZE"` string, comma-separated for
+multiple channels) and `data_paths` (`{NAME: mount_path}`) at your tar
+directories:
 
-- **Dead imports** (verified via `pyflakes`, each individually confirmed
-  unreferenced): `is_torch_version` (`transformer_bria_repa.py`), bare
-  `import diffusers` (was only in the now-removed `pipeline_bria_wan.py`),
-  `flex_attention` (`transformer_bria_varlen.py` — imported but the varlen
-  path only ever calls `varlen_attn`), `get_logger`/`shutil`/`threading`
-  (`utils/torch_utils.py`, only used by the also-removed `AsyncCheckpointSaver`).
-- **`interleave_for_attention` / `split_from_attention`**
-  (`transformer_bria_varlen.py`) — explicitly marked in their own comment as
-  "Legacy functions for backward compatibility," superseded by
-  `build_interleave_indices`/`interleave_with_indices`/`split_with_indices`.
-  Zero call sites anywhere.
-- **`AsyncCheckpointSaver`** (`utils/torch_utils.py`) — fully self-contained
-  class, defined and never instantiated anywhere (`checkpoint_saver.py` uses
-  a different mechanism). `get_params` (`utils/torch_utils.py`) — same, zero
-  call sites.
-- **`T5`/`Llama` text-encoder paths** (`init_text_encoder`, plus the
-  `get_t5_prompt_embeds`/`get_llama_prompt_embeds` helpers they called) —
-  `train_fibo_edit_standard.py`'s own `validate_config()` hard-rejects any
-  `text_encoder_type` other than `"smolLM"` (`raise ValueError(...)` if
-  not), so these branches were provably unreachable, not just unused.
-  `init_text_encoder` is now smolLM-only.
-- **`DatasetMode.DPO`** (`dataset_factory.py`) — `preprocess_dpo`,
-  `collate_dpo`, `_stack_tensors` (only DPO's own helper). No code path in
-  `TrainConfig`/`setup_dataloader` can ever construct a `DatasetConfig` with
-  `mode=DPO` — that's `train_fibo_edit_dpo.py`'s data mode, a different
-  training script. `DatasetMode.DREAMBOOTH` (a real, reachable
-  `TrainConfig.use_dreambooth` option) was kept.
-- **CFG-distillation teacher / DPO reference transformer** (`init_handler.py`)
-  — `TransformerInitHandler._setup_teacher_model`, `_setup_ref_model`, and
-  `_load_lora_weights` (only called from the teacher path). Removed because
-  `train_fibo_edit_standard.py`'s `setup_models()` always passes
-  `create_teacher=False, create_ref=False` — the `create_teacher`/
-  `create_ref` params, and the `teacher_transformer`/`ref_transformer`
-  fields on `TransformerInitResult`, are gone too.
-- **Everything else T5/Llama/CLIP-embedding-only in the original `bria_utils.py`**:
-  `get_text`, `get_by_t5_prompt_embeds`, `get_t5_prompt_embeds` (a *second*,
-  differently-scoped copy of that name — distinct from `bria4_utils.py`'s
-  own `get_t5_prompt_embeds`, which was itself removed above — only ever
-  imported by the now-removed `pipeline_bria_wan.py`), `get_original_sigmas`,
-  `is_ng_none`, `CudaTimerContext` (only imported by `train_fibo.py`, a
-  different script), `compute_density_for_timestep_sampling`,
-  `compute_loss_weighting_for_sd3`, `initialize_distributed`,
-  `get_clip_prompt_embeds`.
-- **Inference-only helpers in the original `bria4_utils.py`**: `load_checkpoint`
-  (explicitly marked `DEPRECATED` in its own docstring — superseded by
-  `checkpoint_loader.py`'s version, which is what's actually imported),
-  `init_inference_scheduler` and `InferenceSchedule` (both explicitly
-  eval/sampling-schedule-only per their own docstrings — used by the
-  discarded pipelines, never by training), `init_data_config` (unused,
-  legacy channel-config builder), `get_DINO_encoding` (unused, pulls in a
-  `timm` dependency for nothing), `create_attention_matrix`, and the unused
-  `SAMPLERS` lookup dict.
-
-## Verification
-
-```
-python3 -m pyflakes *.py utils/*.py   # 0 warnings
-python3 -m py_compile *.py utils/*.py # all files compile
+```yaml
+data_config: "MY_CHANNEL:1:1"     # 1 GPU, batch size 1, for a single channel
+data_paths:
+  MY_CHANNEL: /data/precomputed/sft_edit/my_channel
 ```
 
-Every file also import-checked successfully in this dev environment except
-`transformer_bria_varlen.py` / `utils/torch_utils.py` / `dataset_factory.py`,
-which fail with `ModuleNotFoundError: torch.nn.attention.varlen` — confirmed
-**pre-existing**, not caused by this trim (the untouched original
-`transformer_bria_varlen.py` in the source monorepo fails the identical
-import the same way on this box's torch 2.9.0; the real training image
-`briatorch:pytorch-2.10.0-aws` has this submodule).
+`interleave_resolutions: true` + `interleave_min_res`/`interleave_max_res`
+lets one channel mix multiple `{W}x{H}` resolution buckets (`RandomMix`d
+proportionally to tar count).
 
-## Actually run: local smoke test (train → checkpoint → resume)
+### 2. Model weights
 
-Beyond the static checks above, this copy was run for real on a single GPU
-(no S3, no real training data — `random_latents: true`, `transformer_architecture: a1-t`,
-`debug: 0` with hand-picked tiny/fast settings instead of `debug: 1`, since
-`debug: 1`'s `set_debug_env()` unconditionally forces `lora_rank = 128`,
-which would have made a true `lora_rank: 0` test impossible). Two full
-train → save-checkpoint → reload-checkpoint → resume-training cycles:
+```yaml
+transformer_init_path: /path/to/pretrained/checkpoint   # empty = random init
+text_encoder_path: /path/to/local/SmolLM3-3B             # empty = HF Hub download
+transformer_architecture: alpha-t   # real training scale (a1-t..a7-t, alpha-t)
+```
 
-| | full fine-tune (`lora_rank: 0`) | LoRA (`lora_rank: 64`) |
-|---|---|---|
-| Fresh train, 5 steps | ✅ finite loss (~2.3), checkpoint saved at step 4 | ✅ finite loss (~2.3-2.4), checkpoint saved at step 4 |
-| Checkpoint format | `model.safetensors` + `optimizer.bin`/`scheduler.bin`/`random_states_*.pkl` (accelerate full state), 553M | PEFT adapter format (`adapter_model.safetensors` + `adapter_config.json`) + `optimizer.pt`/`scheduler.pt`, 105M — correctly smaller |
-| Resume + 2 more steps (→7) | ✅ all 5 components loaded ("model/optimizer/scheduler/dataloader sampler/random states loaded successfully"), `global_step` continued at 4→7, not reset | ✅ adapter + optimizer + scheduler loaded, `global_step` continued 4→7 |
-| Weights actually changed between the two checkpoints | ✅ 264/270 tensors changed, max |Δ| ≈ 2e-4 | ✅ 210/210 (100%) adapter tensors changed, max |Δ| ≈ 2e-4 |
-| Second checkpoint saves correctly mid-resume | ✅ (`checkpoint_000006`) | ✅ (`checkpoint_000006`) |
+### 3. Full fine-tune vs. LoRA
 
-**One genuine bug found — not in this repo, an environment dependency
-mismatch**: the LoRA resume initially failed with
-`ImportError: cannot import name 'EmbeddingParallel' from 'transformers.integrations.tensor_parallel'`,
-raised from inside `peft==0.19.1`'s `load_adapter()` → `_maybe_shard_state_dict_for_tp()`
-(this dev box's pre-installed `peft` expects a `transformers` internal class
-`transformers==4.56.0` here doesn't have). `checkpoint_loader.py`'s
-`_load_lora_weights()` — the code that calls `load_adapter()` — is
-unmodified/verbatim from the source repo; the bug is purely a `peft`/`transformers`
-version pairing issue in this environment. Fixed by `pip install -U peft==0.20.0`;
-re-ran and it passed cleanly. Worth checking this same `peft`/`transformers`
-pairing in the real training image before assuming LoRA-resume works there.
+```yaml
+lora_rank: 0        # full fine-tune: every param trainable, saves the full model
+# or
+lora_rank: 64       # LoRA: only adapter params trainable, saves a small PEFT adapter
+lora_init_weights: default   # "default" (B=zeros) or "gaussian"
+```
 
-**Test-harness-only workarounds used (none touch the files above)**: a
-`sitecustomize.py` stub providing a dummy `torch.nn.attention.varlen.varlen_attn`
-(only needed because `utils/torch_utils.py`/`transformer_bria_varlen.py`
-import it unconditionally at module load even when `use_varlen_attention: false`
-— both smoke tests used flash attention, so the stub is never actually
-called), and a patch forcing `wandb.init(mode="disabled")` (`init_wandb()`
-in `bria_utils.py` hardcodes `mode="online"`, which ignores `WANDB_MODE` and
-tries a real network call otherwise).
+A LoRA run resumed later needs the same `lora_rank` and `checkpoint_local_path`
+— see [Resuming](#checkpointing--resuming).
 
-### Follow-up round: FSDP, multi-ref, T2I, EMA
+### 4. Launch (single GPU, multi-GPU, multi-node)
 
-Four more train → checkpoint → resume cycles, each isolating one previously-untested
-code path (still single-GPU, flash attention, `lora_rank: 0`, same `a1-t`/
-`random_latents` setup as above unless noted):
+Single GPU: run `python train_fibo_edit_standard.py --config_path <cfg>.yaml`
+directly (with `MASTER_ADDR`/`MASTER_PORT`/`RANK`/`LOCAL_RANK`/`WORLD_SIZE`
+set as in the quickstart above).
 
-| | result |
+Multi-GPU / multi-node: use `torchrun`, and set `use_fsdp: true` in the
+config (FSDP is how this model shards across GPUs — there's no plain DDP
+path for the full model). `fsdp_sharding_strategy: hybrid` shards within a
+node and replicates across nodes; `full` shards everywhere.
+
+```bash
+torchrun --nnodes $NUM_NODES --nproc_per_node $GPUS_PER_NODE \
+  --node_rank $NODE_RANK --master_addr $MASTER_ADDR --master_port 29500 \
+  train_fibo_edit_standard.py --config_path <cfg>.yaml
+```
+
+`data_config`'s per-channel GPU counts must sum to the total GPU count
+(`nnodes * nproc_per_node`).
+
+### 5. Attention backend
+
+- `use_varlen_attention: false` (default) — flash attention. Only supports
+  `train_batch_size: 1` per GPU (no in-batch packing).
+- `use_varlen_attention: true` — variable-length attention, required for
+  `train_batch_size > 1` and for `context_drop_rate_cfg`/`both_drop_rate_cfg`
+  (context CFG dropout). Needs `torch>=2.10`.
+
+## Checkpointing & resuming
+
+```yaml
+checkpointing_steps: 1000
+resume_from_checkpoint: "no"        # "no" | "latest" | an explicit checkpoint dir name
+checkpoint_local_path: /ckpts/my_run
+```
+
+- `"latest"` picks the highest-numbered `checkpoint_NNNNNN` dir under
+  `checkpoint_local_path`.
+- A checkpoint saves model + optimizer + LR-scheduler + dataloader-sampler +
+  RNG state — resuming continues `global_step` exactly, it doesn't restart.
+- LoRA checkpoints are PEFT-adapter format (`adapter_model.safetensors`,
+  much smaller) instead of a full model state dict.
+- `use_ema: true` additionally saves `transformer_ema.bin` (full EMA
+  weights, for eval) and a per-rank `ema_state_rank_N.pt` shard (for
+  resuming EMA state specifically) at every checkpoint.
+- `reinit_optimizer: 1` / `reinit_scheduler: 1` on a resumed run replace the
+  loaded optimizer/scheduler state with a fresh one (scheduler is
+  recomputed over the *remaining* steps, not the original absolute
+  schedule) — use when changing the LR schedule mid-run.
+
+## Config reference (selected fields)
+
+| Field | Meaning |
 |---|---|
-| **`use_fsdp: true`** (`fsdp_sharding_strategy: full`) | ✅. PyTorch auto-degrades `FULL_SHARD`→`NO_SHARD` at world_size=1 (expected, not a bug), but genuinely exercises accelerate's FSDP-specific save/load path — distinct checkpoint format (`pytorch_model_fsdp.bin`, FSDP-specific optimizer save/load logging) from the plain (non-FSDP) `model.safetensors` path tested earlier. This is the path every real production config actually uses (`use_fsdp: 1` + hybrid sharding), so worth having covered even in this degraded single-GPU form. Resume loaded + continued correctly. |
-| **Multi-ref (`RL_NUM_CONTEXTS=3`)** | ✅. Confirmed `train_common.py::prepare_latents()`'s context-packing loop (`ctx_list` of arbitrary length) works under **flash attention**, not just varlen — this is the actual code path `multi_ref_curated`-style training uses. Finite losses, checkpoint round-trips. |
-| **T2I (`RL_NUM_CONTEXTS=0`, no context latents at all)** | ✅. The opposite edge — `context_patched_latents=None` branch. Finite losses, checkpoint round-trips. |
-| **`use_ema: true`** | ✅. `transformer_ema.bin` (full-gathered, for eval) and `ema_state_rank_0.pt` (per-rank shadow-params shard, for resume) both saved correctly alongside the regular checkpoint; resume logged "Loading per-rank EMA shard" and continued; second checkpoint saved both EMA files again correctly. |
+| `debug` | `1` forces a bunch of fast-iteration overrides (tiny arch, `lora_rank=128`, `max_train_steps=50`, etc.) — good for a quick correctness check, **not** a substitute for choosing your own small config (it hardcodes `lora_rank=128`, so you can't get a `debug` full-fine-tune run). |
+| `mixed_precision` | `bf16` (default), `fp16`, or `no`. |
+| `text_drop_rate_cfg` | Probability of replacing the caption with an empty string per-sample (classifier-free-guidance text dropout). |
+| `context_drop_rate_cfg` / `both_drop_rate_cfg` | Same, for context latents / both together. Requires `use_varlen_attention: true`. |
+| `edit_instruction_only_prob` | Probability of feeding just the caption's `edit_instruction` field instead of the full structured-caption JSON. |
+| `num_checkpointing_blocks` | Gradient checkpointing: `0` disables it, `N>0` checkpoints the first N transformer blocks (trades compute for memory). |
+| `max_sequence_length` / `text_pad_length` | Caption tokenization cap / constant padding length (`-1`=dynamic, `0`=pad to `max_sequence_length`, `>0`=explicit). Constant padding avoids `torch.compile` recompilation. |
+| `use_torch_compile` / `regional_compile` | `regional_compile: 1` compiles each transformer block in-place (keeps checkpoint keys stable) rather than wrapping the whole model. |
 
-**Not run**: `use_varlen_attention: true` and anything requiring it
-(`train_batch_size > 1`, context dropout) — blocked by the missing
-`torch.nn.attention.varlen` on this box's torch 2.9.0 (needs the real
-training image or a torch upgrade to ≥2.10). `torch.compile`
-(`use_torch_compile: true`) — higher time cost for a checkpoint-roundtrip
-test, lower marginal value. DREAMBOOTH data mode — needs real image files +
-`metadata.csv`, more setup than the rest. True multi-GPU/multi-node FSDP
-sharding — only 1 GPU on this box. `reinit_optimizer`/`reinit_scheduler` on
-resume. And anything beyond `a1-t`-scale/a few steps — no attempt made to
-validate loss actually *decreases* over a meaningful training run, since
-random synthetic latents/captions have no signal to fit and that wouldn't
-have proven anything.
+Full field list and defaults: `TrainConfig` in `train_fibo_edit_standard.py`.
+
+## Troubleshooting
+
+**`wandb.errors.errors.CommError: ... 401` on a throwaway/local run** —
+`init_wandb()` hardcodes `mode="online"`, so `WANDB_MODE=disabled` alone
+doesn't stop it from trying a real network call; it still needs a valid
+`WANDB_TOKEN`. For a genuinely offline run, monkeypatch `wandb.init` (force
+`mode="disabled"`) before importing the training script, or just export a
+real `WANDB_TOKEN` if you have wandb access.
+
+**`ValueError: ... environment variable MASTER_ADDR expected`** — Accelerate
+needs `MASTER_ADDR`/`MASTER_PORT` set even for a single-process run outside
+`torchrun`. Set `MASTER_ADDR=127.0.0.1 MASTER_PORT=<any free port>`.
+
+**LoRA checkpoint resume fails with
+`ImportError: cannot import name 'EmbeddingParallel' from transformers.integrations.tensor_parallel`**
+— a `peft`/`transformers` version mismatch (seen with `peft==0.19.1`);
+upgrade to `peft>=0.20.0`.
+
+**`ModuleNotFoundError: No module named 'torch.nn.attention.varlen'`** —
+your torch is older than 2.10. Only matters if `use_varlen_attention: true`;
+otherwise ignore it or pin torch as in `requirements.txt`.
+
+**`transformer_init_path` / `text_encoder_path` resolution** — both fall
+back to `SM_CHANNEL_TRANSFORMER_INIT` / `SM_CHANNEL_TEXT_ENCODER` env vars
+if left empty in the config (a SageMaker-channel-mount convention); on a
+non-SageMaker box, either set the config field directly or set those env
+vars yourself.

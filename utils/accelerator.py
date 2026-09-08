@@ -2,12 +2,8 @@ import functools
 import glob
 import json
 import os
-import sys
 from datetime import timedelta
-from pathlib import Path
 from typing import List
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import diffusers
 import numpy as np
@@ -16,7 +12,7 @@ import transformers
 import webdataset as wds
 from accelerate import Accelerator, FullyShardedDataParallelPlugin
 from accelerate.utils import DistributedDataParallelKwargs, InitProcessGroupKwargs, ProjectConfiguration
-from bria_utils import get_env_prefix
+from utils.common import get_env_prefix
 from torch.distributed.fsdp import MixedPrecision
 from torch.distributed.fsdp.fully_sharded_data_parallel import (
     BackwardPrefetch,
@@ -25,8 +21,8 @@ from torch.distributed.fsdp.fully_sharded_data_parallel import (
     ShardingStrategy,
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-from transformer_bria_repa import FluxSingleTransformerBlock, FluxTransformerBlock
-from transformer_bria_varlen import VarlenFluxTransformerBlock, VarlenFluxSingleTransformerBlock
+from model.transformer import FluxSingleTransformerBlock, FluxTransformerBlock
+from model.transformer_varlen import VarlenFluxTransformerBlock, VarlenFluxSingleTransformerBlock
 
 
 def json_to_data(rank, json_file, attach_structured_captions=True):
