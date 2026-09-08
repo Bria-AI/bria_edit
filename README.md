@@ -1,12 +1,10 @@
 # bria_edit
 
-Standalone training code for **fibo_edit_next** — Bria's edit-conditioned
-image diffusion model (a FLUX-style transformer, flow-matching objective,
-Wan2.2 VAE latent space, smolLM text conditioning). This repo is a trimmed,
-self-contained copy of the training entrypoint and everything it needs to
-run — no unrelated inference/eval code, no dead imports. See
-`README_INTERNAL.md` if you want the full "why is it structured this way"
-writeup; this doc is just how to actually use it.
+Standalone training code for **fibo_edit_next**, Bria's edit-conditioned
+image diffusion model. This is everything needed to train it and nothing
+else — no inference or evaluation code, just the entrypoint and its
+dependencies. Under the hood: a FLUX-derived transformer, trained with a
+flow-matching objective on Wan2.2 VAE latents, with a smolLM text encoder.
 
 ## Install
 
@@ -19,16 +17,18 @@ pip install -r requirements.txt
 default, `use_varlen_attention: false`) works fine on 2.9.x too. See
 [Troubleshooting](#troubleshooting) if you hit import errors here.
 
-## Quickstart: run it locally in 2 minutes (no real data needed)
+## Quickstart (no real data needed)
 
-The fastest way to confirm your environment works is a tiny synthetic-data
-run — no S3, no packed tars, no real checkpoint. `random_latents: true`
-makes the dataloader generate random tensors of the right shape instead of
-reading real data, and `a1-t` is the smallest model scale (~50M params).
+The fastest way to confirm your environment works: a tiny run on synthetic
+data — no S3, no packed tars, nothing to download but the text encoder.
+`random_latents: true` makes the dataloader generate random tensors of the
+right shape instead of reading real data, and `a1-t` is the smallest model
+scale (~50M params), so this finishes in seconds on any GPU.
 
 ```yaml
 # smoke.yaml
-debug: 0
+debug: 0   # not 1 -- debug mode forces lora_rank=128, which would silently
+           # turn this into a LoRA run regardless of the lora_rank below
 transformer_architecture: a1-t
 lora_rank: 0                    # 0 = full fine-tune, >0 = LoRA (e.g. 64)
 vae: wan
@@ -58,7 +58,7 @@ use_varlen_attention: false     # flash attention -- no torch 2.10 requirement
 ```bash
 MASTER_ADDR=127.0.0.1 MASTER_PORT=29500 \
 RANK=0 LOCAL_RANK=0 WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=0 \
-WANDB_MODE=disabled \
+WANDB_TOKEN=<your token> \
 python train_fibo_edit_standard.py --config_path smoke.yaml
 ```
 
@@ -68,9 +68,11 @@ save on your GPU, just with meaningless synthetic data — good for
 real run. To test resuming, rerun with `resume_from_checkpoint: "latest"`
 and a higher `max_train_steps`.
 
-`WANDB_MODE=disabled` avoids needing a real `WANDB_TOKEN` for this kind of
-throwaway run — see [Troubleshooting](#troubleshooting), it doesn't fully
-suppress wandb on its own.
+This still logs a real run to wandb — only `debug: 1` skips that, and it
+forces `lora_rank=128` (see the config table below), so this quickstart
+avoids it on purpose. If you don't want a wandb dependency at all for a
+throwaway run, see [Troubleshooting](#troubleshooting) for how to fully
+disable it (`WANDB_MODE=disabled` on its own does *not* work here).
 
 ## Real training
 
@@ -197,10 +199,18 @@ Full field list and defaults: `TrainConfig` in `train_fibo_edit_standard.py`.
 
 **`wandb.errors.errors.CommError: ... 401` on a throwaway/local run** —
 `init_wandb()` hardcodes `mode="online"`, so `WANDB_MODE=disabled` alone
-doesn't stop it from trying a real network call; it still needs a valid
-`WANDB_TOKEN`. For a genuinely offline run, monkeypatch `wandb.init` (force
-`mode="disabled"`) before importing the training script, or just export a
-real `WANDB_TOKEN` if you have wandb access.
+doesn't stop it from trying a real network call — it still needs a valid
+`WANDB_TOKEN`. Easiest fix: export a real `WANDB_TOKEN` (from
+wandb.ai/settings). For a fully offline run instead, force `wandb.init` into
+disabled mode before the training script imports it — e.g. drop this into a
+`sitecustomize.py` on your `PYTHONPATH`:
+
+```python
+import wandb
+_init = wandb.init
+wandb.init = lambda *a, **kw: _init(*a, **{**kw, "mode": "disabled"})
+wandb.login = lambda *a, **kw: True
+```
 
 **`ValueError: ... environment variable MASTER_ADDR expected`** — Accelerate
 needs `MASTER_ADDR`/`MASTER_PORT` set even for a single-process run outside
