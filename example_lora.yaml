@@ -1,0 +1,90 @@
+# Example: a real LoRA training run (rank 128), based on the fibo_edit_next
+# "reframe" family of production configs. Copy this file, fill in the
+# placeholder paths below, and launch with:
+#
+#   torchrun --nnodes 1 --nproc_per_node <N> --node_rank 0 \
+#     --master_addr 127.0.0.1 --master_port 29500 \
+#     train_fibo_edit_standard.py --config_path example_lora.yaml
+#
+# Every field below that differs from TrainConfig's plain dataclass default
+# is commented "<- default: ...". Fields with no comment match the default
+# and are only included here for a complete, runnable picture.
+
+debug: 0                              # <- default: 1 (must be 0 for any real run)
+seed: 10
+
+# === Model ===
+transformer_architecture: alpha-t     # <- default: a6-t (a6-t is a placeholder scale;
+                                       #    alpha-t is real production scale)
+lora_rank: 128                        # <- default: 0 (0 = full fine-tune; the README's
+                                       #    lora_rank: 64 example is illustrative -- 128 is
+                                       #    this architecture's validated rank)
+lora_init_weights: default            # Kaiming A / zeros B (zero-LoRA-trick init)
+max_sequence_length: 3000
+
+# === Optimizer (matches defaults -- not LoRA-specific) ===
+learning_rate: 1.0e-4                 # matches default. (Production reframe runs use 5.0e-5,
+                                       #    kept equal to their full-fine-tune sibling -- but
+                                       #    that's a run-specific choice, not a LoRA
+                                       #    recommendation, so this example keeps the default.)
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 1.0e-4
+adam_epsilon: 1.0e-15
+max_grad_norm: 0.25
+
+# === LR schedule ===
+lr_scheduler: constant_with_warmup   # matches default. (Production reframe runs use
+                                      #    constant_with_warmup_cosine_decay, but that variant
+                                      #    was adopted for mid-run re-warmups after resumes/data
+                                      #    switches -- the standard scheduler is the right
+                                      #    starting point for a fresh run.)
+lr_warmup_steps: 250                  # <- default: 10000 -- short warmup, consistent across
+                                       #    every LoRA run in this family
+constant_steps: -1                    # <=0 -> auto-fill: constant for the entire remaining
+                                       #    span (from global_step), no decay
+
+# === Precision / perf ===
+mixed_precision: bf16
+use_fsdp: 1
+fsdp_sharding_strategy: hybrid
+use_varlen_attention: false           # bs=1 per GPU below -- flash attention is fine; set
+                                       #    true (and train_batch_size>1) if you need packing
+use_torch_compile: 1                  # <- default: 0
+regional_compile: 1                   # <- default: 0 -- compiles each transformer block
+                                       #    in-place instead of wrapping the whole model
+num_checkpointing_blocks: 0
+
+# === Data ===
+# "NAME:GPUS:BATCH_SIZE" -- e.g. 8 GPUs, batch size 1 each, for a single channel
+data_config: "MY_CHANNEL:8:1"
+data_paths:
+  MY_CHANNEL: /path/to/precomputed/tars   # <- placeholder: point at your own packed tars
+
+# === Model weights ===
+transformer_init_path: /path/to/pretrained/checkpoint   # <- placeholder: base weights the
+                                                          #    LoRA adapters train on top of
+text_encoder_path: /path/to/local/SmolLM3-3B             # <- placeholder (empty = HF Hub download)
+interleave_resolutions: true
+interleave_min_res: 701
+interleave_max_res: 1400
+dataloader_num_workers: 1
+
+# === CFG dropout ===
+text_drop_rate_cfg: 0.1
+context_drop_rate_cfg: 0.0
+
+# === Run length / checkpointing ===
+gradient_accumulation_steps: 8        # <- default: 2
+max_train_steps: 20000                # <- default: 10000000 -- pick your own run length
+checkpointing_steps: 250              # <- default: 10000 -- tighter eval cadence
+resume_from_checkpoint: "no"          # "no" for a fresh run; "latest" to continue an
+                                       #    interrupted one (see README: Checkpointing & Resuming)
+use_ema: 0
+
+# === IO ===
+s3_bucket_name: your-bucket           # <- placeholder
+s3_prefix: your/prefix
+output_dir: /path/to/output
+checkpoint_local_path: /path/to/checkpoints
+wandb_name: my_lora_run

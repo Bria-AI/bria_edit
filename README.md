@@ -130,6 +130,12 @@ lora_init_weights: default   # "default" (B=zeros) or "gaussian"
 A LoRA run resumed later needs the same `lora_rank` and `checkpoint_local_path`
 — see [Resuming](#checkpointing--resuming).
 
+For a complete, runnable example based on a real production LoRA run, see
+[`example_lora.yaml`](example_lora.yaml) — it documents every field that
+differs from the `TrainConfig` defaults above (rank 128, compile flags,
+grad-accum, checkpoint cadence) alongside the ones deliberately left at
+their default value.
+
 ### 4. Launch (single GPU, multi-GPU, multi-node)
 
 Single GPU: run `python train_fibo_edit_standard.py --config_path <cfg>.yaml`
