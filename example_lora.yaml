@@ -56,7 +56,8 @@ regional_compile: 1                   # <- default: 0 -- compiles each transform
 num_checkpointing_blocks: 0
 
 # === Data ===
-# "NAME:GPUS:BATCH_SIZE" -- e.g. 8 GPUs, batch size 1 each, for a single channel
+# "NAME:GPUS:BATCH_SIZE" -- 1 node, 8 GPUs (matches production reframe runs); adjust to
+# however many GPUs are on your node, matching --nproc_per_node in the torchrun command above.
 data_config: "MY_CHANNEL:8:1"
 data_paths:
   MY_CHANNEL: /path/to/precomputed/tars   # <- placeholder: point at your own packed tars
@@ -65,9 +66,6 @@ data_paths:
 transformer_init_path: /path/to/pretrained/checkpoint   # <- placeholder: base weights the
                                                           #    LoRA adapters train on top of
 text_encoder_path: /path/to/local/SmolLM3-3B             # <- placeholder (empty = HF Hub download)
-interleave_resolutions: true
-interleave_min_res: 701
-interleave_max_res: 1400
 dataloader_num_workers: 1
 
 # === CFG dropout ===
