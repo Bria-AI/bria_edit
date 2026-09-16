@@ -56,10 +56,9 @@ regional_compile: 1                   # <- default: 0 -- compiles each transform
 num_checkpointing_blocks: 0
 
 # === Data ===
-# "NAME:GPUS:BATCH_SIZE" -- match GPUS to however many GPUs you're actually running on
-# (this is infra, not a LoRA-specific setting; production reframe runs use 8, but there's
-# no distributed training in this example, so it's left at the README's own 1-GPU example)
-data_config: "MY_CHANNEL:1:1"
+# "NAME:GPUS:BATCH_SIZE" -- 1 node, 8 GPUs (matches production reframe runs); adjust to
+# however many GPUs are on your node, matching --nproc_per_node in the torchrun command above.
+data_config: "MY_CHANNEL:8:1"
 data_paths:
   MY_CHANNEL: /path/to/precomputed/tars   # <- placeholder: point at your own packed tars
 
